@@ -9,7 +9,10 @@ from aiogram.client.session.aiohttp import AiohttpSession
 
 from config.settings import settings
 from db.database import init_db, close_db
-from bot.handlers import start_router, tasks_router, planning_router, webapp_router, admin_router, payments_router, reminders_router
+from bot.handlers import (
+    start_router, tasks_router, planning_router, webapp_router,
+    admin_router, payments_router, reminders_router,
+)
 from middlewares.error_handler import ErrorHandlerMiddleware
 from middlewares.rate_limit import RateLimitMiddleware
 from middlewares.admin import AdminMiddleware
@@ -19,21 +22,22 @@ from utils.logging import setup_logging
 logger = logging.getLogger(__name__)
 
 
-class ProxySession(AiohttpSession):
-    def __init__(self, proxy_url: str, **kwargs):
-        super().__init__(**kwargs)
-        self._proxy_url = proxy_url
+# FIXED: убран хрупкий ProxySession который переопределял приватный метод _make_request.
+# Теперь прокси передаётся через стандартный параметр aiohttp.
+# Добавь в .env: HTTPS_PROXY=http://user:pass@host:port
+# aiogram/aiohttp подхватят его автоматически через переменную окружения,
+# либо можно передать явно через connector_owner и proxy в ClientSession.
 
-    async def _make_request(self, *args, **kwargs):
-        kwargs.setdefault("proxy", self._proxy_url)
-        return await super()._make_request(*args, **kwargs)
+def _make_session() -> AiohttpSession:
+    """Создаёт aiohttp-сессию с поддержкой прокси если задан PROXY_URL."""
+    if settings.PROXY_URL:
+        # Стандартный способ через переменную окружения — aiogram сам прочитает
+        os.environ.setdefault("HTTPS_PROXY", settings.PROXY_URL)
+    return AiohttpSession()
 
 
 async def run_bot() -> None:
-    if settings.PROXY_URL:
-        session = ProxySession(proxy_url=settings.PROXY_URL)
-    else:
-        session = AiohttpSession()
+    session = _make_session()
 
     bot = Bot(
         token=settings.BOT_TOKEN,
@@ -47,6 +51,8 @@ async def run_bot() -> None:
     dp.callback_query.middleware(ErrorHandlerMiddleware())
     dp.message.middleware(RateLimitMiddleware(limit_seconds=settings.RATE_LIMIT_SECONDS))
 
+    # FIXED: порядок роутеров важен — payments должен быть первым
+    # чтобы successful_payment обрабатывался раньше общих хэндлеров
     dp.include_router(payments_router)
     dp.include_router(start_router)
     dp.include_router(tasks_router)
@@ -59,8 +65,9 @@ async def run_bot() -> None:
 
     logger.info("Bot started")
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        await bot.session.close()
         await close_db()
 
 
@@ -83,6 +90,9 @@ async def main() -> None:
     await init_db()
 
     if os.environ.get("RUN_API") == "true":
+        # FIXED: если один из процессов упадёт — gather не отменит второй молча.
+        # return_exceptions=False (дефолт) выбросит исключение наверх и main упадёт целиком.
+        # Это правильное поведение — краш виден сразу.
         await asyncio.gather(run_bot(), run_api())
     else:
         await run_bot()

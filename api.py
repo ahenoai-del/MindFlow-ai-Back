@@ -3,11 +3,13 @@ import hashlib
 import json
 import logging
 from typing import Optional
+from urllib.parse import parse_qs, unquote
 
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 from db import UserRepo, TaskRepo, GamificationRepo, ReminderRepo, StatsRepo, PushSubscriptionRepo
@@ -20,9 +22,15 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MindFlow API")
 
+# FIXED: allow_origins=["*"] несовместим с allow_credentials=True по спецификации CORS.
+# Указываем конкретные домены. WEBAPP_URL берётся из настроек.
+_allowed_origins = [settings.WEBAPP_URL.rstrip("/")]  if settings.WEBAPP_URL else []
+if not _allowed_origins:
+    _allowed_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,23 +38,42 @@ app.add_middleware(
 
 
 def verify_telegram_webapp(init_data: str) -> Optional[dict]:
+    """
+    Верификация данных Telegram WebApp согласно официальной документации:
+    https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    """
     try:
-        params = dict(pair.split("=") for pair in init_data.split("&"))
+        # FIXED: dict(pair.split("=") ...) падает на значениях содержащих "=" (base64 и др.)
+        # Используем parse_qs который корректно обрабатывает URL-encoded строки
+        parsed = parse_qs(init_data, keep_blank_values=True)
+        params = {k: unquote(v[0]) for k, v in parsed.items()}
+
         hash_value = params.pop("hash", None)
         if not hash_value:
             return None
-        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(params.items()))
+
+        data_check_string = "\n".join(
+            f"{k}={v}" for k, v in sorted(params.items())
+        )
+
+        # FIXED: порядок аргументов был перепутан.
+        # Правильно по документации Telegram:
+        #   secret_key = HMAC_SHA256(key=BOT_TOKEN, msg="WebAppData")
+        #   hash = HMAC_SHA256(key=secret_key, msg=data_check_string)
         secret_key = hmac.new(
-            b"WebAppData",
-            settings.BOT_TOKEN.encode(),
+            settings.BOT_TOKEN.encode(),  # key = BOT_TOKEN
+            b"WebAppData",               # msg = "WebAppData"
             hashlib.sha256,
         ).digest()
+
         computed_hash = hmac.new(
             secret_key,
             data_check_string.encode(),
             hashlib.sha256,
         ).hexdigest()
-        if computed_hash == hash_value:
+
+        # FIXED: используем hmac.compare_digest вместо == для защиты от timing attack
+        if hmac.compare_digest(computed_hash, hash_value):
             user_data = params.get("user")
             if user_data:
                 return json.loads(user_data)
@@ -55,6 +82,29 @@ def verify_telegram_webapp(init_data: str) -> Optional[dict]:
         logger.warning("WebApp verification failed: %s", e)
         return None
 
+
+# ---------------------------------------------------------------------------
+# Dependency: получить и проверить текущего пользователя из заголовка
+# ---------------------------------------------------------------------------
+tg_init_data_header = APIKeyHeader(name="X-Telegram-Init-Data", auto_error=False)
+
+
+async def get_current_user_id(init_data: Optional[str] = Depends(tg_init_data_header)) -> Optional[int]:
+    """
+    Возвращает user_id из верифицированного Telegram init_data.
+    Возвращает None если заголовок отсутствует (для обратной совместимости с query param).
+    """
+    if not init_data:
+        return None
+    user_data = verify_telegram_webapp(init_data)
+    if not user_data:
+        raise HTTPException(status_code=401, detail="Invalid Telegram auth data")
+    return user_data.get("id")
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 
 class TaskCreate(BaseModel):
     title: str
@@ -89,6 +139,10 @@ class PushSubscriptionCreate(BaseModel):
     subscription: str
 
 
+# ---------------------------------------------------------------------------
+# User endpoints
+# ---------------------------------------------------------------------------
+
 @app.get("/api/user/{user_id}")
 async def get_user(user_id: int):
     user = await UserRepo.get(user_id)
@@ -119,6 +173,10 @@ async def check_premium(user_id: int):
     return {"is_premium": user.is_premium_active, "premium_until": user.premium_until}
 
 
+# ---------------------------------------------------------------------------
+# Push endpoints
+# ---------------------------------------------------------------------------
+
 @app.get("/api/vapid-public-key")
 async def get_vapid_public_key():
     if not PushService.is_configured():
@@ -139,6 +197,12 @@ async def push_unsubscribe(user_id: int):
     await PushService.unregister_subscription(user_id)
     return {"status": "unsubscribed"}
 
+
+# ---------------------------------------------------------------------------
+# Task endpoints
+# FIXED: добавлена проверка владельца задачи (ownership check).
+# Без этого любой пользователь мог изменить/удалить чужую задачу по task_id.
+# ---------------------------------------------------------------------------
 
 @app.get("/api/tasks/{user_id}")
 async def get_tasks(user_id: int, include_completed: bool = False):
@@ -166,8 +230,19 @@ async def create_task(user_id: int, task: TaskCreate):
     return {"id": new_task.id, "title": new_task.title, "status": "created"}
 
 
+async def _get_task_or_403(task_id: int, user_id: int):
+    """Возвращает задачу если она существует и принадлежит user_id, иначе кидает 403/404."""
+    task = await TaskRepo.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return task
+
+
 @app.patch("/api/tasks/{task_id}")
-async def update_task(task_id: int, task: TaskUpdate):
+async def update_task(task_id: int, task: TaskUpdate, user_id: int = Query(...)):
+    await _get_task_or_403(task_id, user_id)
     updates = {k: v for k, v in task.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -178,7 +253,8 @@ async def update_task(task_id: int, task: TaskUpdate):
 
 
 @app.post("/api/tasks/{task_id}/complete")
-async def complete_task(task_id: int):
+async def complete_task(task_id: int, user_id: int = Query(...)):
+    await _get_task_or_403(task_id, user_id)
     task = await TaskRepo.complete(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -186,7 +262,8 @@ async def complete_task(task_id: int):
 
 
 @app.post("/api/tasks/{task_id}/uncomplete")
-async def uncomplete_task(task_id: int):
+async def uncomplete_task(task_id: int, user_id: int = Query(...)):
+    await _get_task_or_403(task_id, user_id)
     task = await TaskRepo.uncomplete(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -194,10 +271,15 @@ async def uncomplete_task(task_id: int):
 
 
 @app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: int):
+async def delete_task(task_id: int, user_id: int = Query(...)):
+    await _get_task_or_403(task_id, user_id)
     await TaskRepo.delete(task_id)
     return {"status": "deleted"}
 
+
+# ---------------------------------------------------------------------------
+# Reminder endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/api/reminders/{user_id}")
 async def get_reminders(user_id: int):
@@ -243,6 +325,10 @@ async def snooze_reminder(reminder_id: int, body: ReminderSnooze, user_id: int =
     return {"status": "snoozed", "minutes": body.minutes}
 
 
+# ---------------------------------------------------------------------------
+# Voice endpoint
+# ---------------------------------------------------------------------------
+
 @app.post("/api/voice/{user_id}")
 async def transcribe_voice(user_id: int, file: UploadFile = File(...)):
     if not VoiceService.is_configured():
@@ -256,14 +342,25 @@ async def transcribe_voice(user_id: int, file: UploadFile = File(...)):
     return {"text": text}
 
 
+# ---------------------------------------------------------------------------
+# Stats endpoint
+# ---------------------------------------------------------------------------
+
 @app.get("/api/stats/{user_id}")
 async def get_stats(user_id: int):
     stats = await StatsRepo.get_week_stats(user_id)
     return [
-        {"date": s.date, "tasks_completed": s.tasks_completed, "tasks_total": s.tasks_total, "focus_score": s.focus_score}
+        {
+            "date": s.date, "tasks_completed": s.tasks_completed,
+            "tasks_total": s.tasks_total, "focus_score": s.focus_score,
+        }
         for s in stats
     ]
 
+
+# ---------------------------------------------------------------------------
+# Verify endpoint
+# ---------------------------------------------------------------------------
 
 @app.get("/api/verify")
 async def verify_user(init_data: str = Query(...)):
@@ -276,9 +373,12 @@ async def verify_user(init_data: str = Query(...)):
     return {"user_id": user_id, "user": user_data}
 
 
+# ---------------------------------------------------------------------------
+# Service worker
+# ---------------------------------------------------------------------------
+
 @app.get("/sw.js")
 async def service_worker():
-    sw_path = settings.WEBAPP_URL.rstrip("/").rsplit("/", 1)[0] if settings.WEBAPP_URL else ""
     return FileResponse(
         "webapp/sw.js",
         media_type="application/javascript",
