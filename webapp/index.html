@@ -1399,6 +1399,7 @@
         <div class="nav-pills">
             <div class="nav-pill active" data-section="tasks">📋 Задачи</div>
             <div class="nav-pill" data-section="calendar">📅 Календарь</div>
+            <div class="nav-pill" data-section="reminders">🔔</div>
             <div class="nav-pill" data-section="ai">🤖 AI</div>
             <div class="nav-pill" data-section="analytics">📊 Аналитика</div>
             <div class="nav-pill" data-section="settings">⚙️</div>
@@ -1409,10 +1410,18 @@
             <div class="templates-section">
                 <div class="section-title">⚡ Быстрое создание</div>
                 <div class="templates-scroll" id="templates-scroll"></div>
+                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                    <div class="template-chip" onclick="quickDeadline('today')">📅 Сегодня</div>
+                    <div class="template-chip" onclick="quickDeadline('tomorrow')">📅 Завтра</div>
+                    <div class="template-chip" onclick="quickDeadline('week')">📅 На неделю</div>
+                </div>
             </div>
 
             <div class="task-list" id="task-list"></div>
 
+            <div style="position:fixed;bottom:100px;right:24px;display:flex;flex-direction:column;gap:10px;z-index:99;">
+                <button class="icon-btn" style="width:50px;height:50px;font-size:22px;" onclick="startVoiceInput()" id="voice-btn">🎤</button>
+            </div>
             <button class="fab" onclick="openModal('task-modal')">+</button>
         </div>
 
@@ -1428,6 +1437,17 @@
             </div>
             <div class="calendar-grid" id="calendar-grid"></div>
             <div class="task-list" id="calendar-tasks" style="margin-top: 16px;"></div>
+        </div>
+
+        <!-- Reminders Section -->
+        <div class="section" id="section-reminders">
+            <div class="ai-card glass">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                    <div style="font-size:18px;font-weight:700;">🔔 Напоминания</div>
+                    <button class="icon-btn" style="width:40px;height:40px;font-size:18px;" onclick="openModal('reminder-modal')">+</button>
+                </div>
+                <div id="reminders-list"></div>
+            </div>
         </div>
 
         <!-- AI Section -->
@@ -1682,6 +1702,52 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="reminder-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">🔔 Новое напоминание</div>
+                <button class="modal-close" onclick="closeModal('reminder-modal')">✕</button>
+            </div>
+            <form id="reminder-form">
+                <div class="form-group">
+                    <label class="form-label">Текст напоминания</label>
+                    <input type="text" class="form-input" id="reminder-text" required placeholder="О чём напомнить?">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Когда напомнить</label>
+                    <input type="datetime-local" class="form-input" id="reminder-datetime" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Повтор</label>
+                    <div class="option-grid" id="repeat-options">
+                        <div class="option-btn selected" data-value="">Без повтора</div>
+                        <div class="option-btn" data-value="daily">Ежедневно</div>
+                        <div class="option-btn" data-value="weekly">Еженедельно</div>
+                        <div class="option-btn" data-value="monthly">Ежемесячно</div>
+                    </div>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+                    <div class="template-chip" onclick="setReminderQuick('today')">Сегодня</div>
+                    <div class="template-chip" onclick="setReminderQuick('tomorrow')">Завтра</div>
+                    <div class="template-chip" onclick="setReminderQuick('1h')">Через 1ч</div>
+                    <div class="template-chip" onclick="setReminderQuick('3h')">Через 3ч</div>
+                </div>
+                <button type="submit" class="btn">🔔 Создать</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Voice Recording Indicator -->
+    <div class="modal-overlay" id="voice-modal">
+        <div class="modal" style="text-align:center;padding:40px;">
+            <div style="font-size:60px;margin-bottom:20px;">🎤</div>
+            <div style="font-size:18px;font-weight:700;margin-bottom:8px;">Запись...</div>
+            <div style="color:var(--text-muted);margin-bottom:20px;">Говори задачу</div>
+            <div class="typing" style="justify-content:center;"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
+            <button class="btn btn-danger" style="margin-top:20px;" onclick="stopVoiceInput()">⏹ Остановить</button>
+        </div>
+    </div>
+
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
@@ -1703,11 +1769,12 @@
                 
                 if (userRes.ok) {
                     const userData = await userRes.json();
-                    state.user.xp = userData.xp || state.user.xp;
-                    state.user.level = userData.level || state.user.level;
-                    state.user.streak = userData.streak || state.user.streak;
-                    state.user.completed = userData.total_completed || state.user.completed;
-                    state.user.premium = userData.is_premium || false;
+                    if (userData.xp !== undefined) state.user.xp = userData.xp;
+                    if (userData.level !== undefined) state.user.level = userData.level;
+                    if (userData.streak !== undefined) state.user.streak = userData.streak;
+                    if (userData.total_completed !== undefined) state.user.completed = userData.total_completed;
+                    state.user.premium = userData.is_premium === true;
+                    state.user.premium_until = userData.premium_until || null;
                 }
                 
                 if (tasksRes.ok) {
@@ -1735,6 +1802,31 @@
                 renderAll();
             } catch (e) {
                 console.log('Sync error:', e);
+            }
+        }
+        
+        async function syncPremiumStatus() {
+            if (!API_URL || USER_ID.startsWith('guest_')) return;
+            try {
+                const res = await fetch(`${API_URL}/api/user/${USER_ID}/premium`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const wasPremium = state.user.premium;
+                    state.user.premium = data.is_premium === true;
+                    state.user.premium_until = data.premium_until || null;
+                    if (!wasPremium && state.user.premium) {
+                        saveState();
+                        renderAll();
+                        createConfetti();
+                        showXPPopup('PRO!');
+                        tg.showPopup({ title: '🎉 Premium активирован!', message: 'MindFlow Pro теперь доступен!', buttons: [{ type: 'ok' }] });
+                        stopPremiumPolling();
+                    }
+                    saveState();
+                    renderAll();
+                }
+            } catch (e) {
+                console.log('Premium sync error:', e);
             }
         }
         
@@ -1783,6 +1875,23 @@
         if (premiumParam === '1' || premiumParam === 'true') {
             state.user.premium = true;
         }
+        
+        // Premium status polling
+        let premiumCheckInterval = null;
+        function startPremiumPolling() {
+            if (premiumCheckInterval) return;
+            premiumCheckInterval = setInterval(syncPremiumStatus, 10000);
+        }
+        function stopPremiumPolling() {
+            if (premiumCheckInterval) {
+                clearInterval(premiumCheckInterval);
+                premiumCheckInterval = null;
+            }
+        }
+        
+        tg.onEvent('viewportChanged', () => {
+            syncPremiumStatus();
+        });
 
         const LEVELS = [0, 100, 250, 500, 1000, 2000, 4000, 8000, 15000, 30000];
         const DEFAULT_TAGS = [
@@ -2143,30 +2252,20 @@
 
         function buyPremium() {
             if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-            
-            const prices = { month: 150, year: 999 };
-            const months = { month: 1, year: 12 };
-            
             tg.sendData(JSON.stringify({
                 action: 'buy_premium',
-                plan: selectedPlan,
-                stars: prices[selectedPlan],
-                months: months[selectedPlan]
+                plan: selectedPlan
             }));
         }
         
         function checkPremium() {
             if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
-            
-            tg.sendData(JSON.stringify({
-                action: 'check_premium'
-            }));
-            
-            // Показываем уведомление
-            tg.showPopup({ 
-                title: 'Проверка Premium', 
-                message: 'Запрос отправлен боту. Ответ придёт в чат.', 
-                buttons: [{ type: 'ok' }] 
+            syncPremiumStatus().then(() => {
+                if (state.user.premium) {
+                    tg.showPopup({ title: '✅ Premium активен', message: 'MindFlow Pro подключён!' + (state.user.premium_until ? '\nДействует до: ' + state.user.premium_until : ''), buttons: [{ type: 'ok' }] });
+                } else {
+                    tg.showPopup({ title: '❌ Premium не активен', message: 'Подключите MindFlow Pro для доступа ко всем функциям', buttons: [{ type: 'ok' }] });
+                }
             });
         }
         
@@ -2175,6 +2274,7 @@
             saveState();
             renderAll();
             closeModal('premium-modal');
+            createConfetti();
             tg.showPopup({ title: '✓ Готово', message: 'MindFlow Pro активирован!', buttons: [{ type: 'ok' }] });
         }
 
@@ -2624,6 +2724,10 @@
 
         loadState();
         syncWithServer();
+        syncPremiumStatus();
+        startPremiumPolling();
+        initPushNotifications();
+        loadReminders();
         
         document.getElementById('ai-user-name').textContent = state.userName;
         
@@ -2638,6 +2742,202 @@
                 sendAI();
             }
         });
+
+        // === PUSH NOTIFICATIONS ===
+        async function initPushNotifications() {
+            if (!API_URL || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+            try {
+                const reg = await navigator.serviceWorker.register('/sw.js');
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') return;
+                const sub = await reg.pushManager.getSubscription();
+                if (sub) {
+                    await sendSubscriptionToServer(sub);
+                    return;
+                }
+                const vapidRes = await fetch(`${API_URL}/api/vapid-public-key`);
+                if (!vapidRes.ok) return;
+                const { publicKey } = await vapidRes.json();
+                const newSub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: publicKey,
+                });
+                await sendSubscriptionToServer(newSub);
+            } catch (e) {
+                console.log('Push init error:', e);
+            }
+        }
+
+        async function sendSubscriptionToServer(subscription) {
+            if (!API_URL) return;
+            try {
+                await fetch(`${API_URL}/api/push/${USER_ID}/subscribe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ subscription: JSON.stringify(subscription) }),
+                });
+            } catch (e) {
+                console.log('Push subscription save error:', e);
+            }
+        }
+
+        // === VOICE INPUT ===
+        let mediaRecorder = null;
+        let audioChunks = [];
+
+        async function startVoiceInput() {
+            if (!navigator.mediaDevices || !API_URL) {
+                tg.showPopup({ title: 'Ошибка', message: 'Голосовой ввод недоступен', buttons: [{ type: 'ok' }] });
+                return;
+            }
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/ogg' });
+                audioChunks = [];
+                mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    closeModal('voice-modal');
+                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    const formData = new FormData();
+                    formData.append('file', blob, `voice.${mediaRecorder.mimeType.includes('webm') ? 'webm' : 'ogg'}`);
+                    try {
+                        const res = await fetch(`${API_URL}/api/voice/${USER_ID}`, { method: 'POST', body: formData });
+                        if (res.ok) {
+                            const { text } = await res.json();
+                            if (text) {
+                                document.getElementById('task-title').value = text;
+                                openModal('task-modal');
+                                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Voice upload error:', e);
+                        tg.showPopup({ title: 'Ошибка', message: 'Не удалось распознать голос', buttons: [{ type: 'ok' }] });
+                    }
+                };
+                mediaRecorder.start();
+                openModal('voice-modal');
+            } catch (e) {
+                console.log('Microphone error:', e);
+                tg.showPopup({ title: 'Микрофон', message: 'Разреши доступ к микрофону', buttons: [{ type: 'ok' }] });
+            }
+        }
+
+        function stopVoiceInput() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+        }
+
+        // === REMINDERS ===
+        async function loadReminders() {
+            if (!API_URL || USER_ID.startsWith('guest_')) return;
+            try {
+                const res = await fetch(`${API_URL}/api/reminders/${USER_ID}`);
+                if (res.ok) {
+                    const reminders = await res.json();
+                    renderReminders(reminders);
+                }
+            } catch (e) {
+                console.log('Load reminders error:', e);
+            }
+        }
+
+        function renderReminders(reminders) {
+            const list = document.getElementById('reminders-list');
+            if (!reminders || reminders.length === 0) {
+                list.innerHTML = '<div class="empty" style="padding:30px;"><div class="empty-icon">🔔</div><div class="empty-title">Нет напоминаний</div><div class="empty-text">Нажми + чтобы создать</div></div>';
+                return;
+            }
+            list.innerHTML = reminders.map(r => {
+                const dt = new Date(r.remind_at);
+                const timeStr = dt.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                const repeatLabel = r.repeat_interval ? { daily: '🔄 Ежедневно', weekly: '🔄 Еженедельно', monthly: '🔄 Ежемесячно' }[r.repeat_interval] || '' : '';
+                return `<div class="task-card glass" style="margin-bottom:10px;">
+                    <div class="task-top">
+                        <div style="font-size:18px;">🔔</div>
+                        <div class="task-info">
+                            <div class="task-title">${escapeHtml(r.text || 'Напоминание')}</div>
+                            <div class="task-desc">⏰ ${timeStr} ${repeatLabel}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:10px;">
+                        <button class="btn btn-secondary" style="flex:1;padding:8px;" onclick="snoozeReminder(${r.id})">😴 10 мин</button>
+                        <button class="btn btn-danger" style="flex:1;padding:8px;" onclick="deleteReminder(${r.id})">🗑</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        async function snoozeReminder(id) {
+            if (!API_URL) return;
+            try {
+                await fetch(`${API_URL}/api/reminders/${id}/snooze?user_id=${USER_ID}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutes: 10 }) });
+                loadReminders();
+                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+            } catch (e) { console.log('Snooze error:', e); }
+        }
+
+        async function deleteReminder(id) {
+            if (!API_URL) return;
+            try {
+                await fetch(`${API_URL}/api/reminders/${id}?user_id=${USER_ID}`, { method: 'DELETE' });
+                loadReminders();
+            } catch (e) { console.log('Delete reminder error:', e); }
+        }
+
+        document.getElementById('reminder-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const text = document.getElementById('reminder-text').value.trim();
+            const datetime = document.getElementById('reminder-datetime').value;
+            if (!text || !datetime) return;
+            const remindAt = new Date(datetime).toISOString();
+            const repeat = document.querySelector('#repeat-options .selected')?.dataset.value || '';
+            if (!API_URL) { tg.sendData(JSON.stringify({ action: 'add_reminder', text, remind_at: remindAt, repeat_interval: repeat })); closeModal('reminder-modal'); return; }
+            try {
+                await fetch(`${API_URL}/api/reminders/${USER_ID}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, remind_at: remindAt, repeat_interval: repeat || null }),
+                });
+                closeModal('reminder-modal');
+                document.getElementById('reminder-form').reset();
+                loadReminders();
+                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+            } catch (e) { console.log('Create reminder error:', e); }
+        };
+
+        document.querySelectorAll('#repeat-options .option-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('#repeat-options .option-btn').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+            };
+        });
+
+        function setReminderQuick(preset) {
+            const dtInput = document.getElementById('reminder-datetime');
+            const now = new Date();
+            let target;
+            if (preset === 'today') target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0);
+            else if (preset === 'tomorrow') target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0);
+            else if (preset === '1h') target = new Date(now.getTime() + 3600000);
+            else if (preset === '3h') target = new Date(now.getTime() + 10800000);
+            if (target) {
+                const local = new Date(target.getTime() - target.getTimezoneOffset() * 60000);
+                dtInput.value = local.toISOString().slice(0, 16);
+            }
+        }
+
+        // === QUICK DEADLINE BUTTONS ===
+        function quickDeadline(preset) {
+            let date;
+            if (preset === 'today') date = new Date().toISOString().split('T')[0];
+            else if (preset === 'tomorrow') { const d = new Date(); d.setDate(d.getDate() + 1); date = d.toISOString().split('T')[0]; }
+            else if (preset === 'week') { const d = new Date(); d.setDate(d.getDate() + 7); date = d.toISOString().split('T')[0]; }
+            document.getElementById('task-deadline').value = date;
+            document.getElementById('task-title').focus();
+        }
     </script>
 </body>
 </html>

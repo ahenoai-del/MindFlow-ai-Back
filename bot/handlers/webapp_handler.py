@@ -6,6 +6,7 @@ from aiogram.types import Message, CallbackQuery, WebAppInfo, InlineKeyboardMark
 
 from config.settings import settings
 from services.user_service import UserService
+from services.premium_service import PremiumService
 from services.payment_service import PaymentService
 from db import TaskRepo, UserRepo
 from bot.keyboards.kb import get_back_button
@@ -58,21 +59,26 @@ async def handle_webapp_data(message: Message):
         return
 
     if action == "check_premium":
-        status = await UserService.is_premium(message.from_user.id)
-        if status:
-            await message.answer("✅ Premium активен")
+        status = await PremiumService.get_status(message.from_user.id)
+        if status["active"]:
+            until = status["until"] or "бессрочно"
+            await message.answer(f"✅ Premium активен до: {until}")
         else:
             await message.answer("❌ Premium не активен. Напиши /premium для покупки.")
         return
 
     if action == "add_task":
+        title = data.get("title", "").strip()
+        if not title:
+            await message.answer("❌ Пустое название задачи")
+            return
         task = await TaskRepo.create(
             user_id=message.from_user.id,
-            title=data.get("title", ""),
+            title=title,
             description=data.get("description"),
             category=data.get("category", data.get("tag", "general")),
             priority=data.get("priority", 2),
-            deadline=data.get("deadline"),
+            deadline=data.get("deadline") or None,
             estimated_minutes=data.get("estimated_minutes"),
         )
         if task:
@@ -83,31 +89,42 @@ async def handle_webapp_data(message: Message):
 
     if action == "complete_task":
         task_id = data.get("task_id")
-        task = await TaskRepo.complete(task_id)
-        if task:
-            await message.answer(f"✅ Выполнено: {task.title}")
+        if not task_id:
+            await message.answer("❌ Не указан ID задачи")
+            return
+        from services.task_service import TaskService
+        result = await TaskService.complete_task(message.from_user.id, task_id)
+        if result:
+            await message.answer(f"✅ Выполнено: {result['task'].title}")
         else:
             await message.answer("❌ Задача не найдена")
         return
 
     if action == "delete_task":
         task_id = data.get("task_id")
+        if not task_id:
+            await message.answer("❌ Не указан ID задачи")
+            return
         await TaskRepo.delete(task_id)
         await message.answer("🗑 Задача удалена")
         return
 
     if action == "update_task":
+        task_id = data.get("task_id")
+        if not task_id:
+            await message.answer("❌ Не указан ID задачи")
+            return
         filtered = {
             k: v for k, v in {
                 "title": data.get("title"),
                 "description": data.get("description"),
                 "priority": data.get("priority"),
                 "category": data.get("category"),
-                "deadline": data.get("deadline"),
+                "deadline": data.get("deadline") or None,
                 "status": data.get("status"),
             }.items() if v is not None
         }
-        task = await TaskRepo.update(data.get("task_id"), **filtered)
+        task = await TaskRepo.update(task_id, **filtered)
         if task:
             await message.answer(f"✏️ Задача обновлена: {task.title}")
         else:

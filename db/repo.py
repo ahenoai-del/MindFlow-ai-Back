@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 import aiosqlite
 
 from db.database import get_db
-from db.models import User, Task, Plan, Stats, Gamification, Reminder
+from db.models import User, Task, Plan, Stats, Gamification, Reminder, PushSubscription
 
 logger = logging.getLogger(__name__)
 
@@ -513,11 +513,17 @@ class GamificationRepo:
 
 class ReminderRepo:
     @staticmethod
-    async def create(user_id: int, remind_at: str, task_id: Optional[int] = None) -> Optional[Reminder]:
+    async def create(
+        user_id: int,
+        remind_at: str,
+        task_id: Optional[int] = None,
+        text: Optional[str] = None,
+        repeat_interval: Optional[str] = None,
+    ) -> Optional[Reminder]:
         db = get_db()
         cursor = await db.execute(
-            "INSERT INTO reminders (user_id, task_id, remind_at) VALUES (?, ?, ?)",
-            (user_id, task_id, remind_at),
+            "INSERT INTO reminders (user_id, task_id, text, remind_at, repeat_interval) VALUES (?, ?, ?, ?, ?)",
+            (user_id, task_id, text, remind_at, repeat_interval),
         )
         await db.commit()
         rid = cursor.lastrowid
@@ -531,63 +537,48 @@ class ReminderRepo:
         ) as cursor:
             row = await cursor.fetchone()
             if row:
-                return Reminder(
-                    id=row["id"],
-                    user_id=row["user_id"],
-                    task_id=row["task_id"],
-                    remind_at=row["remind_at"],
-                    sent=row["sent"],
-                    created_at=row["created_at"],
-                )
+                return _row_to_reminder(row)
         return None
 
     @staticmethod
     async def get_pending(user_id: Optional[int] = None) -> List[Reminder]:
         db = get_db()
         now = datetime.now().isoformat()
-        query = "SELECT * FROM reminders WHERE sent = 0 AND remind_at <= ?"
+        query = "SELECT * FROM reminders WHERE status = 'pending' AND sent = 0 AND remind_at <= ?"
         params: list[Any] = [now]
         if user_id:
             query += " AND user_id = ?"
             params.append(user_id)
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
-            return [
-                Reminder(
-                    id=row["id"],
-                    user_id=row["user_id"],
-                    task_id=row["task_id"],
-                    remind_at=row["remind_at"],
-                    sent=row["sent"],
-                    created_at=row["created_at"],
-                )
-                for row in rows
-            ]
+            return [_row_to_reminder(row) for row in rows]
 
     @staticmethod
     async def get_user_reminders(user_id: int) -> List[Reminder]:
         db = get_db()
         async with db.execute(
-            "SELECT * FROM reminders WHERE user_id = ? AND sent = 0 ORDER BY remind_at ASC",
+            "SELECT * FROM reminders WHERE user_id = ? AND status = 'pending' AND sent = 0 ORDER BY remind_at ASC",
             (user_id,),
         ) as cursor:
             rows = await cursor.fetchall()
-            return [
-                Reminder(
-                    id=row["id"],
-                    user_id=row["user_id"],
-                    task_id=row["task_id"],
-                    remind_at=row["remind_at"],
-                    sent=row["sent"],
-                    created_at=row["created_at"],
-                )
-                for row in rows
-            ]
+            return [_row_to_reminder(row) for row in rows]
 
     @staticmethod
     async def mark_sent(reminder_id: int) -> None:
         db = get_db()
-        await db.execute("UPDATE reminders SET sent = 1 WHERE id = ?", (reminder_id,))
+        await db.execute(
+            "UPDATE reminders SET sent = 1, status = 'sent' WHERE id = ?",
+            (reminder_id,),
+        )
+        await db.commit()
+
+    @staticmethod
+    async def snooze(reminder_id: int, snoozed_until: str) -> None:
+        db = get_db()
+        await db.execute(
+            "UPDATE reminders SET snoozed_until = ?, remind_at = ?, status = 'snoozed' WHERE id = ?",
+            (snoozed_until, snoozed_until, reminder_id),
+        )
         await db.commit()
 
     @staticmethod
@@ -601,3 +592,76 @@ class ReminderRepo:
         db = get_db()
         await db.execute("DELETE FROM reminders WHERE task_id = ?", (task_id,))
         await db.commit()
+
+
+class PushSubscriptionRepo:
+    @staticmethod
+    async def upsert(user_id: int, subscription_json: str) -> None:
+        db = get_db()
+        now = datetime.now().isoformat()
+        existing = await PushSubscriptionRepo.get_by_user(user_id)
+        if existing:
+            await db.execute(
+                "UPDATE push_subscriptions SET subscription_json = ?, updated_at = ? WHERE user_id = ?",
+                (subscription_json, now, user_id),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO push_subscriptions (user_id, subscription_json, updated_at) VALUES (?, ?, ?)",
+                (user_id, subscription_json, now),
+            )
+        await db.commit()
+
+    @staticmethod
+    async def get_by_user(user_id: int) -> Optional[PushSubscription]:
+        db = get_db()
+        async with db.execute(
+            "SELECT * FROM push_subscriptions WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return PushSubscription(
+                    id=row["id"],
+                    user_id=row["user_id"],
+                    subscription_json=row["subscription_json"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
+        return None
+
+    @staticmethod
+    async def get_all() -> List[PushSubscription]:
+        db = get_db()
+        async with db.execute("SELECT * FROM push_subscriptions") as cursor:
+            rows = await cursor.fetchall()
+            return [
+                PushSubscription(
+                    id=row["id"],
+                    user_id=row["user_id"],
+                    subscription_json=row["subscription_json"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
+                for row in rows
+            ]
+
+    @staticmethod
+    async def delete(user_id: int) -> None:
+        db = get_db()
+        await db.execute("DELETE FROM push_subscriptions WHERE user_id = ?", (user_id,))
+        await db.commit()
+
+
+def _row_to_reminder(row: aiosqlite.Row) -> Reminder:
+    return Reminder(
+        id=row["id"],
+        user_id=row["user_id"],
+        task_id=row["task_id"],
+        text=row["text"] if "text" in row.keys() else None,
+        remind_at=row["remind_at"],
+        status=row["status"] if "status" in row.keys() else "pending",
+        repeat_interval=row["repeat_interval"] if "repeat_interval" in row.keys() else None,
+        snoozed_until=row["snoozed_until"] if "snoozed_until" in row.keys() else None,
+        sent=row["sent"],
+        created_at=row["created_at"],
+    )

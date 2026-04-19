@@ -79,11 +79,24 @@ async def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             task_id INTEGER,
+            text TEXT,
             remind_at TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            repeat_interval TEXT,
+            snoozed_until TEXT,
             sent INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (task_id) REFERENCES tasks(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subscription_json TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
         );
 
         CREATE INDEX IF NOT EXISTS idx_users_premium ON users(is_premium);
@@ -92,9 +105,33 @@ async def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_tasks_deadline ON tasks(deadline);
         CREATE INDEX IF NOT EXISTS idx_reminders_pending ON reminders(sent, remind_at);
+        CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status, remind_at);
         CREATE INDEX IF NOT EXISTS idx_gamification_user ON gamification(user_id);
+        CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
     """)
     await _db.commit()
+
+    try:
+        await _db.execute("ALTER TABLE reminders ADD COLUMN text TEXT")
+        await _db.commit()
+    except Exception:
+        pass
+    try:
+        await _db.execute("ALTER TABLE reminders ADD COLUMN status TEXT DEFAULT 'pending'")
+        await _db.commit()
+    except Exception:
+        pass
+    try:
+        await _db.execute("ALTER TABLE reminders ADD COLUMN repeat_interval TEXT")
+        await _db.commit()
+    except Exception:
+        pass
+    try:
+        await _db.execute("ALTER TABLE reminders ADD COLUMN snoozed_until TEXT")
+        await _db.commit()
+    except Exception:
+        pass
+
     logger.info("Database initialized")
 
 

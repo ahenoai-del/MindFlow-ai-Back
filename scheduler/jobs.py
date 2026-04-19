@@ -6,6 +6,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from aiogram import Bot
 
 from db import UserRepo, TaskRepo, PlanRepo, ReminderRepo
+from services.push_service import PushService
+from services.reminder_service import ReminderService
 from ai.scheduler import generate_day_plan, generate_evening_summary
 
 scheduler = AsyncIOScheduler()
@@ -72,26 +74,29 @@ async def send_scheduled_messages(bot: Bot) -> None:
 
 async def send_reminders(bot: Bot) -> None:
     try:
-        reminders = await ReminderRepo.get_pending()
+        reminders = await ReminderService.get_due_reminders()
     except Exception as e:
         logger.error("Failed to fetch reminders: %s", e)
         return
 
     for reminder in reminders:
         try:
-            task = None
-            if reminder.task_id:
-                task = await TaskRepo.get(reminder.task_id)
+            reminder_text = ReminderService.format_reminder_text(reminder)
+            push_payload = ReminderService.format_push_payload(reminder)
 
-            if task:
-                text = f"⏰ <b>Напоминание!</b>\n\n📋 {task.title}"
-                if task.description:
-                    text += f"\n📝 {task.description}"
-            else:
-                text = "⏰ <b>Напоминание!</b>"
+            delivery = await PushService.send_push_or_fallback(
+                bot=bot,
+                user_id=reminder.user_id,
+                title=push_payload["title"],
+                body=push_payload["body"],
+                fallback_text=reminder_text,
+            )
 
-            await bot.send_message(reminder.user_id, text)
-            await ReminderRepo.mark_sent(reminder.id)
+            logger.info("Reminder %s delivered via %s", reminder.id, delivery)
+
+            await ReminderService.mark_sent(reminder.id)
+            await ReminderService.handle_repeat(reminder)
+
         except Exception as e:
             logger.debug("Failed to send reminder %s: %s", reminder.id, e)
 

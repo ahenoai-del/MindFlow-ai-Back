@@ -5,9 +5,12 @@ from services.task_service import TaskService
 from services.gamification_service import GamificationService
 from services.analytics_service import AnalyticsService
 from services.broadcast_service import BroadcastService
+from services.push_service import PushService
+from services.reminder_service import ReminderService
+from services.voice_service import VoiceService
 
 __all__ = [
     "UserService", "PremiumService", "PaymentService",
     "TaskService", "GamificationService", "AnalyticsService",
-    "BroadcastService",
+    "BroadcastService", "PushService", "ReminderService", "VoiceService",
 ]

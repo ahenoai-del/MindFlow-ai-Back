@@ -9,7 +9,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 
 from config.settings import settings
 from db.database import init_db, close_db
-from bot.handlers import start_router, tasks_router, planning_router, webapp_router, admin_router, payments_router
+from bot.handlers import start_router, tasks_router, planning_router, webapp_router, admin_router, payments_router, reminders_router
 from middlewares.error_handler import ErrorHandlerMiddleware
 from middlewares.rate_limit import RateLimitMiddleware
 from middlewares.admin import AdminMiddleware
@@ -53,6 +53,7 @@ async def run_bot() -> None:
     dp.include_router(planning_router)
     dp.include_router(webapp_router)
     dp.include_router(admin_router)
+    dp.include_router(reminders_router)
 
     setup_scheduler(bot)
 

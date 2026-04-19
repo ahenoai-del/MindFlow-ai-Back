@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     PREMIUM_MONTH_STARS: int = 150
     PREMIUM_YEAR_STARS: int = 999
     USER_CACHE_TTL: int = 300
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_CLAIMS_EMAIL: str = "mailto:admin@mindflow.ai"
 
     @property
     def resolved_ai_model(self) -> str:

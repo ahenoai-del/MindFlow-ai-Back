@@ -80,9 +80,22 @@ class Reminder:
     id: int
     user_id: int
     task_id: Optional[int] = None
+    text: Optional[str] = None
     remind_at: str = ""
+    status: str = "pending"
+    repeat_interval: Optional[str] = None
+    snoozed_until: Optional[str] = None
     sent: int = 0
     created_at: Optional[str] = None
+
+
+@dataclass
+class PushSubscription:
+    id: int
+    user_id: int
+    subscription_json: str = ""
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 ACHIEVEMENTS: Dict[str, Dict[str, Any]] = {
