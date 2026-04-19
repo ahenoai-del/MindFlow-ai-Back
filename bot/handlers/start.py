@@ -44,6 +44,9 @@ TIMEZONE_MAP = {
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
+    # FIXED: сбрасываем предыдущий FSM-стейт чтобы не было застревания
+    # если пользователь нажал /start посреди онбординга
+    await state.clear()
     try:
         user, is_new = await UserService.get_or_create(
             message.from_user.id, message.from_user.username
@@ -81,7 +84,21 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.message(OnboardingStates.waiting_timezone)
 async def process_timezone(message: Message, state: FSMContext):
     city = message.text.strip()
-    timezone = TIMEZONE_MAP.get(city.lower(), "UTC")
+    timezone = TIMEZONE_MAP.get(city.lower())
+
+    # FIXED: если город не найден — сообщаем об этом вместо тихого фолбека на UTC
+    if not timezone:
+        await message.answer(
+            f"⚠️ Город «{city}» не найден в списке.\n\n"
+            "Попробуй один из: Moscow, London, New York, Tokyo, Paris, Berlin, "
+            "Dubai, Singapore, Sydney, Almaty, Tashkent, Minsk, Kyiv, Istanbul\n\n"
+            "Или напиши 'UTC' чтобы использовать универсальное время."
+        )
+        return
+
+    if city.upper() == "UTC":
+        timezone = "UTC"
+
     await UserService.update_settings(message.from_user.id, timezone=timezone)
     await state.update_data(timezone=timezone)
     await message.answer(
@@ -121,7 +138,9 @@ async def process_evening(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data == "back_main")
-async def back_to_main(callback: CallbackQuery):
+async def back_to_main(callback: CallbackQuery, state: FSMContext):
+    # FIXED: сбрасываем стейт при возврате в главное меню
+    await state.clear()
     await callback.message.answer(
         "🏠 <b>Главное меню</b>",
         reply_markup=get_main_menu(),
@@ -130,15 +149,16 @@ async def back_to_main(callback: CallbackQuery):
         await callback.message.delete()
     except Exception:
         pass
+    await callback.answer()
 
 
 async def show_main_menu(message: Message):
     webapp_url = await _build_webapp_url(message.from_user.id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        *([[InlineKeyboardButton(
             text="📱 Открыть приложение",
             web_app=WebAppInfo(url=webapp_url),
-        )] if webapp_url else [],
+        )]] if webapp_url else []),
         [
             InlineKeyboardButton(text="📋 Задачи", callback_data="task_list"),
             InlineKeyboardButton(text="📊 План", callback_data="plan_generate"),
@@ -163,7 +183,9 @@ async def _build_webapp_url(user_id: int) -> str:
     if is_premium:
         params.append("premium=1")
     if settings.API_URL:
-        params.append(f"api_url={settings.API_URL}")
+        # FIXED: кодируем API_URL чтобы он не сломал query string если содержит спецсимволы
+        from urllib.parse import quote
+        params.append(f"api_url={quote(settings.API_URL, safe=':/')}")
     if params:
         separator = "&" if "?" in url else "?"
         url += separator + "&".join(params)

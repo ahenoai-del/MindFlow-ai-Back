@@ -46,6 +46,7 @@ async def handle_webapp_data(message: Message):
         return
 
     action = data.get("action")
+    user_id = message.from_user.id
 
     if action == "buy_premium":
         await PaymentService.create_invoice(message, data.get("plan", "year"))
@@ -59,7 +60,7 @@ async def handle_webapp_data(message: Message):
             return
         repeat = data.get("repeat_interval") or None
         reminder = await ReminderService.create(
-            user_id=message.from_user.id,
+            user_id=user_id,
             text=text,
             remind_at=remind_at,
             repeat_interval=repeat,
@@ -77,7 +78,7 @@ async def handle_webapp_data(message: Message):
         return
 
     if action == "check_premium":
-        status = await PremiumService.get_status(message.from_user.id)
+        status = await PremiumService.get_status(user_id)
         if status["active"]:
             until = status["until"] or "бессрочно"
             await message.answer(f"✅ Premium активен до: {until}")
@@ -91,7 +92,7 @@ async def handle_webapp_data(message: Message):
             await message.answer("❌ Пустое название задачи")
             return
         task = await TaskRepo.create(
-            user_id=message.from_user.id,
+            user_id=user_id,
             title=title,
             description=data.get("description"),
             category=data.get("category", data.get("tag", "general")),
@@ -110,8 +111,16 @@ async def handle_webapp_data(message: Message):
         if not task_id:
             await message.answer("❌ Не указан ID задачи")
             return
+        # FIXED: проверяем владельца задачи перед выполнением
+        existing = await TaskRepo.get(task_id)
+        if not existing:
+            await message.answer("❌ Задача не найдена")
+            return
+        if existing.user_id != user_id:
+            await message.answer("❌ Нет доступа к этой задаче")
+            return
         from services.task_service import TaskService
-        result = await TaskService.complete_task(message.from_user.id, task_id)
+        result = await TaskService.complete_task(user_id, task_id)
         if result:
             await message.answer(f"✅ Выполнено: {result['task'].title}")
         else:
@@ -123,6 +132,14 @@ async def handle_webapp_data(message: Message):
         if not task_id:
             await message.answer("❌ Не указан ID задачи")
             return
+        # FIXED: проверяем владельца перед удалением
+        existing = await TaskRepo.get(task_id)
+        if not existing:
+            await message.answer("❌ Задача не найдена")
+            return
+        if existing.user_id != user_id:
+            await message.answer("❌ Нет доступа к этой задаче")
+            return
         await TaskRepo.delete(task_id)
         await message.answer("🗑 Задача удалена")
         return
@@ -131,6 +148,14 @@ async def handle_webapp_data(message: Message):
         task_id = data.get("task_id")
         if not task_id:
             await message.answer("❌ Не указан ID задачи")
+            return
+        # FIXED: проверяем владельца перед обновлением
+        existing = await TaskRepo.get(task_id)
+        if not existing:
+            await message.answer("❌ Задача не найдена")
+            return
+        if existing.user_id != user_id:
+            await message.answer("❌ Нет доступа к этой задаче")
             return
         filtered = {
             k: v for k, v in {
@@ -142,11 +167,15 @@ async def handle_webapp_data(message: Message):
                 "status": data.get("status"),
             }.items() if v is not None
         }
+        if not filtered:
+            await message.answer("❌ Нет данных для обновления")
+            return
         task = await TaskRepo.update(task_id, **filtered)
         if task:
             await message.answer(f"✏️ Задача обновлена: {task.title}")
         else:
-            await message.answer("❌ Задача не найдена")
+            await message.answer("❌ Не удалось обновить задачу")
         return
 
+    logger.warning("Unknown webapp action: %s from user %s", action, user_id)
     await message.answer("❓ Неизвестное действие")

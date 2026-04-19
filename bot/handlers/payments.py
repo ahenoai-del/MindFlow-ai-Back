@@ -30,8 +30,9 @@ async def cmd_premium(message: Message):
 @router.callback_query(F.data.startswith("buy_"))
 async def process_buy(callback: CallbackQuery):
     plan = callback.data.split("_")[1]
-    if plan not in PaymentService.get_plans():
-        await callback.answer("Неверный план")
+    valid_plans = PaymentService.get_plans()
+    if plan not in valid_plans:
+        await callback.answer("Неверный план", show_alert=True)
         return
     await PaymentService.create_invoice(callback.message, plan)
     await callback.answer()
@@ -51,6 +52,14 @@ async def on_successful_payment(message: Message):
     payment = message.successful_payment
     payload = payment.invoice_payload
 
+    logger.info(
+        "Successful payment from user %s, payload=%s, amount=%s %s",
+        message.from_user.id,
+        payload,
+        payment.total_amount,
+        payment.currency,
+    )
+
     until_str = await PaymentService.process_successful_payment(
         payload, message.from_user.id
     )
@@ -58,12 +67,16 @@ async def on_successful_payment(message: Message):
         from config.settings import settings
         kb = None
         if settings.WEBAPP_URL:
-            webapp_url = settings.WEBAPP_URL + ("&" if "?" in settings.WEBAPP_URL else "?") + "premium=1"
-            if settings.API_URL:
-                webapp_url += f"&api_url={settings.API_URL}"
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Открыть приложение", web_app=WebAppInfo(url=webapp_url))],
-            ])
+            # FIXED: строим URL через _build_webapp_url чтобы не дублировать логику
+            from bot.handlers.start import _build_webapp_url
+            webapp_url = await _build_webapp_url(message.from_user.id)
+            if webapp_url:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="📱 Открыть приложение",
+                        web_app=WebAppInfo(url=webapp_url),
+                    )],
+                ])
         await message.answer(
             f"🎉 <b>Premium активирован!</b>\n\n"
             f"Действует до: {until_str}\n\n"
@@ -71,7 +84,15 @@ async def on_successful_payment(message: Message):
             reply_markup=kb,
         )
     else:
-        await message.answer("✅ Оплата прошла успешно!")
+        # FIXED: логируем ошибку обработки платежа — деньги списаны, Premium не выдан
+        logger.error(
+            "Payment processed but premium not activated for user %s, payload=%s",
+            message.from_user.id, payload,
+        )
+        await message.answer(
+            "✅ Оплата прошла успешно!\n\n"
+            "⚠️ Если Premium не активировался в течение минуты — напиши в поддержку."
+        )
 
 
 @router.callback_query(F.data == "check_premium")
