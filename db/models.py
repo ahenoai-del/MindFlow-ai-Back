@@ -1,18 +1,31 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 
 @dataclass
 class User:
     id: int
-    username: Optional[str]
+    username: Optional[str] = None
     timezone: str = "UTC"
     morning_time: str = "09:00"
     evening_time: str = "21:00"
     is_premium: int = 0
     premium_until: Optional[str] = None
-    created_at: Optional[datetime] = None
+    created_at: Optional[str] = None
+    last_activity: Optional[str] = None
+
+    @property
+    def is_premium_active(self) -> bool:
+        if not self.is_premium:
+            return False
+        if not self.premium_until:
+            return bool(self.is_premium)
+        try:
+            until_date = datetime.strptime(self.premium_until, "%Y-%m-%d").date()
+            return until_date >= datetime.now().date()
+        except (ValueError, TypeError):
+            return False
 
 
 @dataclass
@@ -26,8 +39,8 @@ class Task:
     deadline: Optional[str] = None
     estimated_minutes: Optional[int] = None
     status: str = "pending"
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
 
 
 @dataclass
@@ -36,7 +49,7 @@ class Plan:
     user_id: int
     date: str
     schedule: str
-    created_at: Optional[datetime] = None
+    created_at: Optional[str] = None
 
 
 @dataclass
@@ -59,20 +72,20 @@ class Gamification:
     max_streak: int = 0
     last_activity: Optional[str] = None
     total_completed: int = 0
-    achievements: Optional[str] = "[]"
+    achievements: str = "[]"
 
 
 @dataclass
 class Reminder:
     id: int
     user_id: int
-    task_id: Optional[int]
-    remind_at: str
+    task_id: Optional[int] = None
+    remind_at: str = ""
     sent: int = 0
-    created_at: Optional[datetime] = None
+    created_at: Optional[str] = None
 
 
-ACHIEVEMENTS = {
+ACHIEVEMENTS: Dict[str, Dict[str, Any]] = {
     "first_task": {"name": "Начало пути", "description": "Создать первую задачу", "icon": "🎯", "xp": 10},
     "first_complete": {"name": "Первый шаг", "description": "Выполнить первую задачу", "icon": "✅", "xp": 15},
     "streak_3": {"name": "На волне", "description": "3 дня подряд", "icon": "🔥", "xp": 30},
@@ -87,17 +100,9 @@ ACHIEVEMENTS = {
     "ai_user": {"name": "AI-энтузиаст", "description": "Использовать AI для 10 задач", "icon": "🤖", "xp": 40},
 }
 
-LEVEL_XP = {
-    1: 0,
-    2: 100,
-    3: 250,
-    4: 500,
-    5: 1000,
-    6: 2000,
-    7: 4000,
-    8: 8000,
-    9: 15000,
-    10: 30000,
+LEVEL_XP: Dict[int, int] = {
+    1: 0, 2: 100, 3: 250, 4: 500, 5: 1000,
+    6: 2000, 7: 4000, 8: 8000, 9: 15000, 10: 30000,
 }
 
 

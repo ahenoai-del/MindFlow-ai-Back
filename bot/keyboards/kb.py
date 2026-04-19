@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 
@@ -34,28 +34,18 @@ def get_task_actions(task_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_priority_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🔴 Высокий", callback_data="priority_1")
-    builder.button(text="🟡 Средний", callback_data="priority_2")
-    builder.button(text="🟢 Низкий", callback_data="priority_3")
-    builder.adjust(3)
-    return builder.as_markup()
-
-
-def get_category_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    categories = [
-        ("💼 Работа", "work"),
-        ("🏠 Дом", "home"),
-        ("📚 Учёба", "study"),
-        ("💪 Спорт", "sport"),
-        ("🎯 Прочее", "other")
-    ]
-    for text, cat in categories:
-        builder.button(text=text, callback_data=f"category_{cat}")
-    builder.adjust(3)
-    return builder.as_markup()
+def get_tasks_list_keyboard(tasks) -> InlineKeyboardMarkup:
+    buttons = []
+    for task in tasks[:10]:
+        status = "✅ " if task.status == "completed" else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{status}{task.title[:30]}",
+                callback_data=f"task_view_{task.id}",
+            )
+        ])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_plan_menu() -> InlineKeyboardMarkup:
@@ -77,9 +67,9 @@ def get_settings_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_back_button() -> InlineKeyboardMarkup:
+def get_back_button(callback_data: str = "back_main") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔙 Назад", callback_data="back_main")
+    builder.button(text="🔙 Назад", callback_data=callback_data)
     return builder.as_markup()
 
 
@@ -87,3 +77,27 @@ def get_webapp_button(webapp_url: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📱 Открыть приложение", web_app={"url": webapp_url})
     return builder.as_markup()
+
+
+def get_premium_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ 150 звёзд — Месяц", callback_data="buy_month")],
+        [InlineKeyboardButton(text="⭐ 999 звёзд — Год (44% скидка)", callback_data="buy_year")],
+    ])
+
+
+def get_admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
+            InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users"),
+        ],
+        [
+            InlineKeyboardButton(text="📈 Аналитика", callback_data="admin_analytics"),
+            InlineKeyboardButton(text="💎 Premium", callback_data="admin_premium"),
+        ],
+        [
+            InlineKeyboardButton(text="🏆 Топ", callback_data="admin_top"),
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings"),
+        ],
+    ])

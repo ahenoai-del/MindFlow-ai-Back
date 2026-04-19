@@ -1,16 +1,21 @@
 import asyncio
 import logging
 import os
+
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
-from core.config import settings
-from db.database import init_db
-from bot.handlers import start, tasks, planning, webapp_handler, admin, payments
-from scheduler.jobs import setup_scheduler
 
-logging.basicConfig(level=logging.INFO)
+from config.settings import settings
+from db.database import init_db, close_db
+from bot.handlers import start_router, tasks_router, planning_router, webapp_router, admin_router, payments_router
+from middlewares.error_handler import ErrorHandlerMiddleware
+from middlewares.rate_limit import RateLimitMiddleware
+from middlewares.admin import AdminMiddleware
+from scheduler.jobs import setup_scheduler
+from utils.logging import setup_logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,50 +29,58 @@ class ProxySession(AiohttpSession):
         return await super()._make_request(*args, **kwargs)
 
 
-async def run_bot():
-    proxy_url = settings.PROXY_URL
-    if proxy_url:
-        session = ProxySession(proxy_url=proxy_url)
+async def run_bot() -> None:
+    if settings.PROXY_URL:
+        session = ProxySession(proxy_url=settings.PROXY_URL)
     else:
         session = AiohttpSession()
-    
+
     bot = Bot(
         token=settings.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        session=session
+        session=session,
     )
+
     dp = Dispatcher()
-    
-    dp.include_router(payments.router)
-    dp.include_router(start.router)
-    dp.include_router(tasks.router)
-    dp.include_router(planning.router)
-    dp.include_router(webapp_handler.router)
-    dp.include_router(admin.router)
-    
+
+    dp.message.middleware(ErrorHandlerMiddleware())
+    dp.callback_query.middleware(ErrorHandlerMiddleware())
+    dp.message.middleware(RateLimitMiddleware(limit_seconds=settings.RATE_LIMIT_SECONDS))
+
+    dp.include_router(payments_router)
+    dp.include_router(start_router)
+    dp.include_router(tasks_router)
+    dp.include_router(planning_router)
+    dp.include_router(webapp_router)
+    dp.include_router(admin_router)
+
     setup_scheduler(bot)
-    
+
     logger.info("Bot started")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await close_db()
 
 
-async def run_api():
+async def run_api() -> None:
     import uvicorn
     from api import app
-    
+
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8000)),
-        log_level="info"
+        log_level="info",
     )
     server = uvicorn.Server(config)
     await server.serve()
 
 
-async def main():
+async def main() -> None:
+    setup_logging(log_level=settings.LOG_LEVEL, log_file=settings.LOG_FILE)
     await init_db()
-    
+
     if os.environ.get("RUN_API") == "true":
         await asyncio.gather(run_bot(), run_api())
     else:
