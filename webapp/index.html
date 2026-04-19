@@ -1879,7 +1879,7 @@
         // Premium status polling
         let premiumCheckInterval = null;
         function startPremiumPolling() {
-            if (premiumCheckInterval) return;
+            if (!API_URL || premiumCheckInterval) return;
             premiumCheckInterval = setInterval(syncPremiumStatus, 10000);
         }
         function stopPremiumPolling() {
@@ -2260,13 +2260,22 @@
         
         function checkPremium() {
             if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
-            syncPremiumStatus().then(() => {
-                if (state.user.premium) {
-                    tg.showPopup({ title: '✅ Premium активен', message: 'MindFlow Pro подключён!' + (state.user.premium_until ? '\nДействует до: ' + state.user.premium_until : ''), buttons: [{ type: 'ok' }] });
-                } else {
-                    tg.showPopup({ title: '❌ Premium не активен', message: 'Подключите MindFlow Pro для доступа ко всем функциям', buttons: [{ type: 'ok' }] });
-                }
-            });
+            if (API_URL) {
+                syncPremiumStatus().then(() => {
+                    _showPremiumResult();
+                });
+            } else {
+                tg.sendData(JSON.stringify({ action: 'check_premium' }));
+                tg.showPopup({ title: 'Проверка Premium', message: 'Запрос отправлен боту. Ответ придёт в чат.', buttons: [{ type: 'ok' }] });
+            }
+        }
+
+        function _showPremiumResult() {
+            if (state.user.premium) {
+                tg.showPopup({ title: '✅ Premium активен', message: 'MindFlow Pro подключён!' + (state.user.premium_until ? '\nДействует до: ' + state.user.premium_until : ''), buttons: [{ type: 'ok' }] });
+            } else {
+                tg.showPopup({ title: '❌ Premium не активен', message: 'Подключите MindFlow Pro для доступа ко всем функциям', buttons: [{ type: 'ok' }] });
+            }
         }
         
         function activatePremium() {
@@ -2786,41 +2795,60 @@
         let audioChunks = [];
 
         async function startVoiceInput() {
-            if (!navigator.mediaDevices || !API_URL) {
-                tg.showPopup({ title: 'Ошибка', message: 'Голосовой ввод недоступен', buttons: [{ type: 'ok' }] });
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                tg.showPopup({ title: '🎤 Голосовой ввод', message: 'Отправь голосовое сообщение в чат бота — он распознает речь и создаст задачу.', buttons: [{ type: 'ok' }] });
                 return;
             }
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/ogg' });
+                let mimeType = 'audio/webm;codecs=opus';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = 'audio/ogg';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = '';
+                    }
+                }
+                const options = mimeType ? { mimeType } : {};
+                mediaRecorder = new MediaRecorder(stream, options);
                 audioChunks = [];
                 mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
                 mediaRecorder.onstop = async () => {
                     stream.getTracks().forEach(t => t.stop());
                     closeModal('voice-modal');
-                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-                    const formData = new FormData();
-                    formData.append('file', blob, `voice.${mediaRecorder.mimeType.includes('webm') ? 'webm' : 'ogg'}`);
-                    try {
-                        const res = await fetch(`${API_URL}/api/voice/${USER_ID}`, { method: 'POST', body: formData });
-                        if (res.ok) {
-                            const { text } = await res.json();
-                            if (text) {
-                                document.getElementById('task-title').value = text;
-                                openModal('task-modal');
-                                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                    if (audioChunks.length === 0) {
+                        tg.showPopup({ title: 'Ошибка', message: 'Аудио не записано', buttons: [{ type: 'ok' }] });
+                        return;
+                    }
+                    const ext = mediaRecorder.mimeType?.includes('webm') ? 'webm' : 'ogg';
+                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/ogg' });
+
+                    if (API_URL) {
+                        const formData = new FormData();
+                        formData.append('file', blob, `voice.${ext}`);
+                        try {
+                            const res = await fetch(`${API_URL}/api/voice/${USER_ID}`, { method: 'POST', body: formData });
+                            if (res.ok) {
+                                const data = await res.json();
+                                if (data.text) {
+                                    document.getElementById('task-title').value = data.text;
+                                    openModal('task-modal');
+                                    if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                                    return;
+                                }
                             }
+                        } catch (e) {
+                            console.log('Voice API error:', e);
                         }
-                    } catch (e) {
-                        console.log('Voice upload error:', e);
-                        tg.showPopup({ title: 'Ошибка', message: 'Не удалось распознать голос', buttons: [{ type: 'ok' }] });
+                        tg.showPopup({ title: 'Ошибка', message: 'Не удалось распознать голос. Попробуй ещё раз.', buttons: [{ type: 'ok' }] });
+                    } else {
+                        tg.showPopup({ title: '🎤 Голосовой ввод', message: 'Отправь голосовое сообщение в чат бота — он распознает и создаст задачу.', buttons: [{ type: 'ok' }] });
                     }
                 };
                 mediaRecorder.start();
                 openModal('voice-modal');
             } catch (e) {
                 console.log('Microphone error:', e);
-                tg.showPopup({ title: 'Микрофон', message: 'Разреши доступ к микрофону', buttons: [{ type: 'ok' }] });
+                tg.showPopup({ title: '🎤 Голосовой ввод', message: 'Отправь голосовое сообщение в чат бота — он распознает и создаст задачу.', buttons: [{ type: 'ok' }] });
             }
         }
 
@@ -2832,16 +2860,21 @@
 
         // === REMINDERS ===
         async function loadReminders() {
-            if (!API_URL || USER_ID.startsWith('guest_')) return;
+            if (!API_URL || USER_ID.startsWith('guest_')) {
+                renderReminders([]);
+                return;
+            }
             try {
                 const res = await fetch(`${API_URL}/api/reminders/${USER_ID}`);
                 if (res.ok) {
                     const reminders = await res.json();
                     renderReminders(reminders);
+                    return;
                 }
             } catch (e) {
                 console.log('Load reminders error:', e);
             }
+            renderReminders([]);
         }
 
         function renderReminders(reminders) {
@@ -2851,8 +2884,11 @@
                 return;
             }
             list.innerHTML = reminders.map(r => {
-                const dt = new Date(r.remind_at);
-                const timeStr = dt.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                let timeStr = r.remind_at;
+                try {
+                    const dt = new Date(r.remind_at);
+                    timeStr = dt.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                } catch(e) {}
                 const repeatLabel = r.repeat_interval ? { daily: '🔄 Ежедневно', weekly: '🔄 Еженедельно', monthly: '🔄 Ежемесячно' }[r.repeat_interval] || '' : '';
                 return `<div class="task-card glass" style="margin-bottom:10px;">
                     <div class="task-top">
@@ -2884,6 +2920,7 @@
             try {
                 await fetch(`${API_URL}/api/reminders/${id}?user_id=${USER_ID}`, { method: 'DELETE' });
                 loadReminders();
+                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
             } catch (e) { console.log('Delete reminder error:', e); }
         }
 
@@ -2891,21 +2928,44 @@
             e.preventDefault();
             const text = document.getElementById('reminder-text').value.trim();
             const datetime = document.getElementById('reminder-datetime').value;
-            if (!text || !datetime) return;
+            if (!text) {
+                tg.showPopup({ title: 'Ошибка', message: 'Напиши текст напоминания', buttons: [{ type: 'ok' }] });
+                return;
+            }
+            if (!datetime) {
+                tg.showPopup({ title: 'Ошибка', message: 'Выбери дату и время', buttons: [{ type: 'ok' }] });
+                return;
+            }
             const remindAt = new Date(datetime).toISOString();
             const repeat = document.querySelector('#repeat-options .selected')?.dataset.value || '';
-            if (!API_URL) { tg.sendData(JSON.stringify({ action: 'add_reminder', text, remind_at: remindAt, repeat_interval: repeat })); closeModal('reminder-modal'); return; }
-            try {
-                await fetch(`${API_URL}/api/reminders/${USER_ID}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text, remind_at: remindAt, repeat_interval: repeat || null }),
-                });
+
+            if (API_URL) {
+                try {
+                    const res = await fetch(`${API_URL}/api/reminders/${USER_ID}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text, remind_at: remindAt, repeat_interval: repeat || null }),
+                    });
+                    if (res.ok) {
+                        closeModal('reminder-modal');
+                        document.getElementById('reminder-form').reset();
+                        loadReminders();
+                        if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                        tg.showPopup({ title: '✅ Готово', message: 'Напоминание создано!', buttons: [{ type: 'ok' }] });
+                        return;
+                    }
+                    const err = await res.json().catch(() => ({}));
+                    tg.showPopup({ title: 'Ошибка', message: err.detail || 'Не удалось создать', buttons: [{ type: 'ok' }] });
+                } catch (e) {
+                    console.log('Create reminder API error:', e);
+                    tg.showPopup({ title: 'Ошибка', message: 'Сервер недоступен. Напиши /remind в чате бота.', buttons: [{ type: 'ok' }] });
+                }
+            } else {
+                tg.sendData(JSON.stringify({ action: 'add_reminder', text, remind_at: remindAt, repeat_interval: repeat }));
                 closeModal('reminder-modal');
                 document.getElementById('reminder-form').reset();
-                loadReminders();
-                if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-            } catch (e) { console.log('Create reminder error:', e); }
+                tg.showPopup({ title: '✅ Отправлено', message: 'Напоминание создано через бота!', buttons: [{ type: 'ok' }] });
+            }
         };
 
         document.querySelectorAll('#repeat-options .option-btn').forEach(btn => {
