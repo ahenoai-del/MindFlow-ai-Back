@@ -75,21 +75,6 @@ async def init_db() -> None:
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
 
-        CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            task_id INTEGER,
-            text TEXT,
-            remind_at TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            repeat_interval TEXT,
-            snoozed_until TEXT,
-            sent INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (task_id) REFERENCES tasks(id)
-        );
-
         CREATE TABLE IF NOT EXISTS push_subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -105,7 +90,6 @@ async def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_tasks_deadline ON tasks(deadline);
         CREATE INDEX IF NOT EXISTS idx_reminders_pending ON reminders(sent, remind_at);
-        CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status, remind_at);
         CREATE INDEX IF NOT EXISTS idx_gamification_user ON gamification(user_id);
         CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
     """)
@@ -128,6 +112,14 @@ async def init_db() -> None:
         pass
     try:
         await _db.execute("ALTER TABLE reminders ADD COLUMN snoozed_until TEXT")
+        await _db.commit()
+    except Exception:
+        pass
+
+    try:
+        await _db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status, remind_at)"
+        )
         await _db.commit()
     except Exception:
         pass
