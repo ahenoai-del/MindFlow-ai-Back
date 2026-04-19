@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from db import TaskRepo
 from services.task_service import TaskService
+from services.voice_service import VoiceService
 from utils.formatting import priority_emoji, priority_name
 from bot.keyboards.kb import get_tasks_menu, get_task_actions, get_tasks_list_keyboard, get_back_button
 
@@ -22,6 +23,36 @@ class TaskEditStates(StatesGroup):
     waiting_title = State()
     waiting_description = State()
     waiting_deadline = State()
+
+
+@router.message(F.voice)
+async def handle_voice_message(message: Message):
+    if not VoiceService.is_configured():
+        await message.answer("🎤 Голосовой ввод пока недоступен. Напиши задачу текстом.")
+        return
+
+    try:
+        file_id = message.voice.file_id
+        file = await message.bot.get_file(file_id)
+        audio_data = await message.bot.download_file(file.file_path)
+        audio_bytes = audio_data.read()
+
+        text = await VoiceService.transcribe(audio_bytes, "voice.ogg")
+        if not text:
+            await message.answer("❌ Не удалось распознать речь. Попробуй ещё раз.")
+            return
+
+        task = await TaskService.create_from_text(message.from_user.id, text)
+        if task:
+            await message.answer(
+                f"🎤 <b>Распознано:</b> {text}\n\n"
+                f"✅ Задача создана: <b>{task.title}</b>"
+            )
+        else:
+            await message.answer(f"🎤 <b>Распознано:</b> {text}\n\n❌ Не удалось создать задачу")
+    except Exception as e:
+        logger.error("Voice message handling error: %s", e)
+        await message.answer("❌ Ошибка обработки голосового сообщения")
 
 
 @router.message(F.text == "📋 Задачи")

@@ -133,11 +133,12 @@ async def back_to_main(callback: CallbackQuery):
 
 
 async def show_main_menu(message: Message):
+    webapp_url = await _build_webapp_url(message.from_user.id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📱 Открыть приложение",
-            web_app=WebAppInfo(url=settings.WEBAPP_URL),
-        )] if settings.WEBAPP_URL else [],
+            web_app=WebAppInfo(url=webapp_url),
+        )] if webapp_url else [],
         [
             InlineKeyboardButton(text="📋 Задачи", callback_data="task_list"),
             InlineKeyboardButton(text="📊 План", callback_data="plan_generate"),
@@ -151,6 +152,22 @@ async def show_main_menu(message: Message):
         "🏠 <b>Главное меню</b>\n\nВыбери действие или открой приложение:",
         reply_markup=keyboard,
     )
+
+
+async def _build_webapp_url(user_id: int) -> str:
+    if not settings.WEBAPP_URL:
+        return ""
+    url = settings.WEBAPP_URL
+    params: list[str] = []
+    is_premium = await UserService.is_premium(user_id)
+    if is_premium:
+        params.append("premium=1")
+    if settings.API_URL:
+        params.append(f"api_url={settings.API_URL}")
+    if params:
+        separator = "&" if "?" in url else "?"
+        url += separator + "&".join(params)
+    return url
 
 
 def _is_valid_time(time_str: str) -> bool:

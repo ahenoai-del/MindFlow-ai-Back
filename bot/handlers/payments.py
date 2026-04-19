@@ -1,7 +1,7 @@
 import logging
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import Command
 
 from services.payment_service import PaymentService
@@ -55,10 +55,20 @@ async def on_successful_payment(message: Message):
         payload, message.from_user.id
     )
     if until_str:
+        from config.settings import settings
+        kb = None
+        if settings.WEBAPP_URL:
+            webapp_url = settings.WEBAPP_URL + ("&" if "?" in settings.WEBAPP_URL else "?") + "premium=1"
+            if settings.API_URL:
+                webapp_url += f"&api_url={settings.API_URL}"
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Открыть приложение", web_app=WebAppInfo(url=webapp_url))],
+            ])
         await message.answer(
             f"🎉 <b>Premium активирован!</b>\n\n"
             f"Действует до: {until_str}\n\n"
-            f"Спасибо за поддержку! ⭐"
+            f"Спасибо за поддержку! ⭐",
+            reply_markup=kb,
         )
     else:
         await message.answer("✅ Оплата прошла успешно!")

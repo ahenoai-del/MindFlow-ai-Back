@@ -8,6 +8,7 @@ from config.settings import settings
 from services.user_service import UserService
 from services.premium_service import PremiumService
 from services.payment_service import PaymentService
+from services.reminder_service import ReminderService
 from db import TaskRepo, UserRepo
 from bot.keyboards.kb import get_back_button
 
@@ -21,16 +22,8 @@ async def open_webapp(message: Message):
         await message.answer("⚠️ WebApp пока не настроен.\nДобавь WEBAPP_URL в .env файл")
         return
 
-    is_premium = await UserService.is_premium(message.from_user.id)
-    webapp_url = settings.WEBAPP_URL
-    params: list[str] = []
-    if is_premium:
-        params.append("premium=1")
-    if settings.API_URL:
-        params.append(f"api_url={settings.API_URL}")
-    if params:
-        separator = "&" if "?" in webapp_url else "?"
-        webapp_url += separator + "&".join(params)
+    from bot.handlers.start import _build_webapp_url
+    webapp_url = await _build_webapp_url(message.from_user.id)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -56,6 +49,31 @@ async def handle_webapp_data(message: Message):
 
     if action == "buy_premium":
         await PaymentService.create_invoice(message, data.get("plan", "year"))
+        return
+
+    if action == "add_reminder":
+        text = data.get("text", "").strip()
+        remind_at = data.get("remind_at", "")
+        if not text or not remind_at:
+            await message.answer("❌ Укажи текст и время напоминания")
+            return
+        repeat = data.get("repeat_interval") or None
+        reminder = await ReminderService.create(
+            user_id=message.from_user.id,
+            text=text,
+            remind_at=remind_at,
+            repeat_interval=repeat,
+        )
+        if reminder:
+            from datetime import datetime
+            try:
+                dt = datetime.fromisoformat(remind_at)
+                formatted = dt.strftime("%d.%m.%Y %H:%M")
+            except (ValueError, TypeError):
+                formatted = remind_at
+            await message.answer(f"✅ Напоминание создано!\n\n🔔 {text}\n⏰ {formatted}")
+        else:
+            await message.answer("❌ Не удалось создать напоминание")
         return
 
     if action == "check_premium":
